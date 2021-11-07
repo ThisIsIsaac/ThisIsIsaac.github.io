@@ -1,0 +1,41 @@
+# Assignment 1
+
+## 1. Add
+In `add.cuh` file, write an element-wise addition kernel with below interface:
+
+```cpp
+/**
+ * performs element-wise addition between x and y, and writes
+ * the output to out.
+ */
+template <class T>
+__global__ void add(int n, T* x, T* y, T* out);
+```
+
+- `T* x` and `T* y` are 1D arrays of `T` with `n` number of contiguous `T` items. They are both input arrays.
+- `T* out` has same dimension as `in`. You will write your outputs to `out`.
+
+- the kernel MUST be able to handle `n` greater than and less than the number of threads you spawned. 
+
+If you are not sure what `template` does in C++, check out [this tutorial](http://www.cplusplus.com/doc/oldtutorial/templates/).
+
+## 2. Transpose
+
+In `transpose.cuh` file, write a transpose kernel with below interface:
+
+```cpp
+/**
+ * transposes dimensions swap_dim1 and swap_dim2
+ * of in and writes the output to out
+ */
+template <class T>
+__global__ void transpose(int* dims, int swap_dim1, int swap_dim2, T* in, T* out)
+```
+
+- `int* dims` is an `int ` array of 4 items indicating the size of the matrix in the dimension. `dims[0]` is the size of `in` in the first dimension, `dims[1]` in the second dimension, and so on. Each value must be greater than or equal to 1.
+- `int swap_dim1` is one of the two dimensions to swap. `0 <= swap_dim1 <= 3`.
+- `int swap_dim2` is one of the two dimensions to swap. `0 <= swap_dim2 <= 3`
+- `T* in` is a 4D array implemented as a 1D array in memory. 
+- `T* out` is same as `in`. You will write to `out`.
+
+If you are confused, take a look at [pytorch’s transpose](https://pytorch.org/docs/stable/torch.html#torch.transpose). 

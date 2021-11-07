@@ -1,0 +1,72 @@
+# Measuring Runtime of Kernels
+
+## Rules of thumb
+
+1. **Average of multiple runs:** Find the average time of multiple runs (10 ~ 20 iterations NOT including warmup rounds) because timing kernel from a single run is unreliable. 
+1. **Warmup rounds:** The first few kernel launches take much longer due to the warmup cost. Run at least 5 ~ 10 warmup iterations and exclude them from any statistics.
+    - **, you may ask. There is huge latency for the first (or maybe first few) kernel launches primarily due to two major factors: raising the power state of the GPU and kernel launch overhead. 
+1. **Do not include memory operations:** Any memory operations such as `cudaMalloc`, `cudaMemcpy`, or `cudaMemset` should not be included.
+1. **GPU should be idle:** If another kernel is running, it can significantly interfere with the speed of the kernel you are profiling. 
+1. **Turn MPS off:** MPS takes toll on performance of individual kernels.
+1. **(Sometimes) CPU should be idle:** for profiling Python Deep Learning frameworks, always make sure no other CPU-intensive process (ex. training deep learning networks)
+
+---
+### Why do we need warmup rounds
+
+The first (or first few) kernels usually display significant added latency. This is for two primary reasons: 1) the latency of raising GPU’s power level from low to high, and 2) the latency of launching kernels.
+
+1. Nvidia GPUs have multiple power levels. In an idle state, when there is no task on the GPU, the GPU falls into a lower power state to preserve the lifespan of the GPU and power consumption. When a kernel is launched while GPU is at a low power state, extra latency is added to the first few runs to bring up the power state. This latency can be reduced by turning on Driver Persistence. Click [here](https://docs.nvidia.com/deploy/driver-persistence/index.html) to read more on Driver Persistence.
+
+1. Kernels are always launched from the CPU using `cuLaunchKernel` CUDA Driver API and there is some untrivial amount of latency associated with `cuLaunchKernel`. However, when multiple kernels are launched asynchronously, CPU queues multiple kernels asynchronously and all the latency, except for the latency of the first few kernel launches, is hidden.
+
+---
+
+## Profiling C/C++ kernels
+
+```cpp
+#include <chrono>
+#include <stdio.h>
+#include <iostream>
+
+int num_warmup_rounds = 10;
+int num_rounds = 20;
+
+/** 
+ * allocate GPU memory 
+ **/
+
+// warmup round
+for (int i = 0; i < num_warmup_rounds; i++){
+    /** 
+     * launch kernel
+     **/
+}
+
+gpuErrChk(cudaDeviceSynchronize());
+
+auto start_time = std::chrono::steady_clock::now();
+
+// kernel calls that are timed
+for (int i = 0; i < num_rounds; i++){
+    /** 
+     * launch kernel
+     **/
+}
+
+gpuErrChk(cudaDeviceSynchronize());
+
+auto end_time = std::chrono::steady_clock::now();
+
+auto duration = std::chrono::duration_cast<microseconds>(end_time-start_time).count();
+
+std::cout << "duration " << duration / ((float)num_rounds) <<"us" << std::endl;
+```
+
+You don’t have to stick with `chrono`. Just make sure that you don’t use any wacky timing library like `time.h`.
+
+---
+
+## Profiling Deep Learning Python frameworks
+
+**Tensorflow is SYNCHRONOUS by default** so you don’t need explicit synchronization statements, but **many Pytorch operations are ASYNCHRONOUS.** Therefore, always append `torch.cuda.synchronize()` after computations you want to measure. Also, beware of which operations initiate data transfer between the host and device. You may be including unintended memory copy operations in your time that could make the runtime longer than it really is.
+

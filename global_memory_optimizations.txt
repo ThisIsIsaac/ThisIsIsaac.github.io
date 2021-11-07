@@ -1,0 +1,258 @@
+# Global Memory Optimizations
+
+## CUDA Memory Model
+
+From fastest and most scarce to slowest and most abundant:
+
+1. Registers
+1. Shared memory
+1. constant memory
+1. Read-only cache
+1. texture memory
+1. Local memory
+1. Global Memory
+
+/images/gpu_memory_model.png
+
+---
+
+### Registers
+
+**Scope:** thread 
+
+**Lifetime:** lifetime of the thread
+
+**Allocation method:** Any variable without special qualifiers:
+
+```cpp
+// below operations use register
+int x_reg = 0;
+float y_reg = in[0];
+double z_reg[64];
+```
+
+Each register is 32-bits and allocated per thread. Any data over 32-bits (ex. `double` which is 64 bits) are stored over multiple registers. All threads in a kernel have the same number of registers.
+
+> Register is one of the most scarce resources in a GPU. It is often what restricts parallelism. 
+
+You cannot directly enforce how many registers are going to be allocated per thread. However, you can put a max limit by setting `--maxregcount=n` in the `nvcc` compilation option.
+
+---
+
+### Local Memory
+
+**Scope:** thread 
+
+**Lifetime:** lifetime of the thread
+
+Local memory is used when **register spilling** occurs. Local memory resides in the same hardware as global memory, which means read & write to local memory is as costly as read & write to global memory. 
+
+#### Register Spilling
+
+**Register spilling occurs when you try to use more registers than there are.** The spilt memory is leaked to local memory, which resides in DRAM. Therefore, register spilling can take EXTREME toll on performance.
+
+---
+
+### Shared Memory
+
+**Scope:** threads in the same block 
+
+**Lifetime:** lifetime of the block
+
+**Allocation method:‌**
+
+1. Static shared memory allocation
+
+    ```cpp
+    __shared__ float x_shared[64];
+    ```
+    
+1. Dynamic shared memory allocation
+
+    ```cpp
+    extern __shared__ int y_shared[];
+    ```
+    Above code declares shared memory whose size is dynamically determined at compile time by the third kernel execution configuration: `<<<grid_dim, block_dim, shared_memory_size>>>`
+
+> Shared memory is a user-programmable cache. 
+
+It is orders of magnitude faster than the global memory. We will go into using shared memory effectively later in the course.
+
+---
+
+### Constant Memory 
+
+**Scope:** all kernels in the application 
+
+**Lifetime:** lifetime of the application
+
+---
+
+### Texture Memory 
+
+**Scope:** all kernels in the application 
+
+**Lifetime:** lifetime of the application
+
+---
+
+### Global Memory 
+
+**Scope:** all kernels in the application 
+
+**Lifetime:** lifetime of the application
+
+**Allocation method:** 
+
+1. Dynamic allocation using `cudaMalloc`
+
+    ```cpp
+    float* x_global;
+    cudaMalloc(&x_global, sizeof(float) * num_elements);
+    ```
+    
+1. Allocation using `__device__` in the global scope
+
+    ```cpp
+    // must be declared in global scope
+    __device__ int x_global[256];
+    
+    int main(){
+    ...
+    }
+    ```
+
+---
+
+## Deep Dive into CUDA Global Memory 
+
+### Global Memory Caches
+
+> L1 and L2 cache store only load operations from DRAM, not store operations.
+
+There are 2 cache modes for global memory. The default is to use both L1 and L2 cache, but you can manually set the kernel to only use L2 cache. 
+
+L1 cache is located per SM, shared by all blocks allocated in the SM. It has **cache granularity of 128 bytes**.
+
+There is only a single L2 cache per device, shared by all SMs. L2 cache has **cache granularity of 32 bytes.** 
+
+Just like in any system, the cache granularity is determined by the cache granularity of the highest level cache. Since the default cache uses L1 as the cache for L2, the default mode has cache granularity of 128 bytes.
+
+> Since most kernels use the default cache mode, and it is the optimal choice most of the time, we are only going be concerned with exploiting the default cache mode.
+
+---
+
+### Optimizations
+
+Global memory operations are one of the most expensive operations. For example, on V100, FP32 add operations take 2 cycles while global memory operations take 100+ cycles. 
+
+To optimize global memory transactions, there are 2 key properties you MUST hold close to your heart:
+
+> First, global memory transactions operate on consecutive arrays of memory
+
+> Second, global memory is aligned to the size of the array.
+
+#### A Quick Walkthrough of Global Load Operations
+Let’s take a look at the code below and try to decompose what is going on.
+
+```cpp
+float in_reg = in[threadIdx.x];
+```
+
+`in` is a `float` array allocated in the global memory space with `cudaMalloc`. For the sake of simplicity, let’s assume `idx` increments for each thread so that all threads are accessing contiguous bytes of memory (thread0 accesses `in[0]`, thread1 accesses `in[1]` and so on), and `in` is big enough that all threads are accessing addresses within `in`.
+ 
+When we first read the code, our first intuition may be: “thread with `threadIdx.x` issues global load instruction for a single `float` item at address `in + threadIdx.x`”. 
+
+> However, just like any arithmetic operations, memory operations are also issued on per-warp bases. 
+
+This means the warp with currently executing thread is issuing a global memory transaction in behalf of all threads. 
+
+Then, you may ask, does a single warp have to issue load instructions 32 times for all the threads in the warp? No. Thankfully, Nvidia has solved the issue by increasing memory bandwidth to 128 bytes per load / store. 
+
+> Regardless of how many bytes are actually accessed by the threads, a single instruction loads / stores 128 bytes of contiguous memory. The loaded 128 bytes of data are broadcasted to all threads in a warp, and threads have access to 1, 2, 4, 8, and 16 bytes of contiguous memory.
+
+Let’s say we have a poorly written kernel where all the threads are accessing a single `float` item in the exact same address. Even if the entire warp only requires 4 bytes of memory, the load instruction will still fetch 128 bytes from global memory, and 124 bytes will become wasted. We call this wasted bandwidth.
+
+Store operations are much alike load operations. However, unlike load operations, if threads within the same warp are writing to overlapping regions of memory, the behavior may be undefined.
+
+### Coalesced Access
+Let’s analyze the first property of global memory:
+
+> Global memory transactions **operate on consecutive arrays of memory**
+
+When we access memory, regardless of how much of memory we are actually using, we always load `n` consecutive bytes of memory. Therefore, if we don’t utilize all `n` bytes of memory, we are not fully utilizing the bus bandwidth.
+
+Let’s take a look at an uncoalesced access pattern, where the threads in the wrap request sparse regions of memory:
+
+/images/uncoalesced_unaligned_access.png
+
+Even if the threads only require sparse regions, the entire consecutive array of memory is loaded and stored. Any region of the array that is not utilized by the warp ends up getting wasted.
+
+If we were to coalesce the above transaction, we would be able to utilize the bus bandwidth 100%:
+
+/images/coalesced_aligned_access.png
+
+### Aligned Access
+
+> The **global memory is aligned to the size of the array**.
+
+This means global memory is divided into equally sized arrays whose size is equal to the bus bandwidth (32, 64, or 128 bytes).  And **if a request is sent such that the requested region of memory spans across multiple arrays, all of the arrays must be operated on.** 
+
+**In order to prevent such wasted bandwidth, we must align memory operations.** A memory operation is aligned if it follows the three rules:
+
+1. The smallest address accessed by a thread in the warp must be a multiple of cache size.
+1. The size of the data accessed must be one of: 1, 2, 4, 8, or 16 bytes
+1. The memory address must be a multiple of the size of the data type
+
+
+Let’s take a typical unaligned access pattern:
+
+/images/coalesced_unaligned_access.png
+
+In the diagram, a warp is accessing a coalesced 128 bytes of memory. Since the memory bus bandwidth is 128 bytes, it can ideally be served in a single transaction. However, the requested region of memory spans across two arrays. This is an example of unaligned access pattern. Because the access is unaligned, there needs to be two transactions in order to operate on the two arrays, instead of one.
+
+If we were to align the operation, we would be able to serve the operation in a single load:
+
+/images/uncoalesced_aligned_access.png
+
+In the second diagram, even though we are requesting the same amount of memory, because the access is aligned, we can complete the operation in a single load.
+
+#### Data Structure Alignment
+
+Built-in types (`char`, `short`, `float`, `double`...) already fulfill the size requirement (1, 2, 4, 8, or 16 bytes). To make sure custom structures also follow the requirement, we use `__align__(n)` which aligns the structure to `n` bytes.
+
+Let’s take a look at an example:
+
+```cpp
+
+// good_float2 is 8 bytes aligned!
+struct good_float2 __align__(8) {
+    float x;
+    float y;
+};
+
+// bad_float2 cannot be gauranteed to be 8 bytes aligned...
+struct bad_float2 {
+    float x;
+    float y;
+};
+```
+
+> Even if memory operations on are coalesced and aligned, **`bad_float2` leads to 50% lower bus utilization compared to `good_float2` due to poor data structure alignment.**
+
+`good_float2` is guaranteed to be 8 bytes aligned. Without `__align__(8)`, we wouldn’t be able to guarantee this property. In fact, if you were to take a look at the SASS code, memory transactions of `good_float2` occurs in a single transaction, where each thread accesses 8 bytes of global memory. However, memory transactions of `bad_float2` occur in 2 separate transactions, each transaction accessing 4 bytes of global memory. This leads to only 50% bus utilization, even if memory transactions are both aligned and coalesced!
+
+### Aligned & Coalesced Access
+
+The optimal way to access global memory is to **coalesce and align** memory operations within a warp:
+
+/images/coalesced_aligned_access.png
+
+---
+
+#### Side Talk: Optimizing Deep Learning Frameworks
+If you are working with deep learning frameworks, it is especially important to know how to optimize global memory operations.
+
+> One of the most common bottlenecks observed in many deep learning frameworks (ex. Pytorch, TensorFlow, Flashlight, Caffe) is memory operations due to wasted bandwidth. This is due to the modular nature of CUDA kernels in deep learning frameworks, where each kernel only performs very few arithmetic operations.
+
+Simply by improving global memory operation efficiency, we can observe 4~5 fold increase in throughput. (To take a look at how this is done in practice, checkout [my PR](https://github.com/tensorflow/tensorflow/pull/28758#issue-279344238) to TensorFlow.)

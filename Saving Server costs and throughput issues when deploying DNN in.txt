@@ -1,0 +1,28 @@
+# Troubleshooting Realtime DNN services in production
+# Taking full advantage of your GPUs
+# Accelerating your DNNs
+# Low-latency real-time DNNs in production
+
+[link](https://www.nvidia.com/en-us/gtc/present/instructor-led-training/)
+
+## Description (1000 characters)
+
+> Provide a detailed description of your instructor-led training for use on the GTC website, scheduler, and mobile app. It should describe what the attendee can expect to learn and offer additional details about what will be covered.
+
+One of the biggest problems when deploying DNNs in production is throughput. There is a clear trend in Deep Neural Networks: higher the accuracies of DNNs lower the throughput. The low throughput imposes a significant challenge when deploying the DNNs outside of labs since most services -- from autonomous driving to text-to-speech -- require realtime inference with low latencies. In this training, we take a look at practical approaches to solving any issues related to DNN throughput from a non-algorithmic perspective. 
+
+Basics of GPU hardware and CUDA
+
+
+Topics:
+- CUDA MPS
+- Nsight profiling tools
+- CUDA Runtime API
+- Optimizing DNN frameworks (Pytorch & Tensorflow)
+- how to read nvidia-smi correctly
+- What it means to run DNNs in DNN frameworks?
+- Review of major DNN frameworks (Pytorch, Tensorflow, Flashlight) for production
+
+## Abstract (4000 characters)
+
+> Provide reviewers with a more in depth description of your work. You are required to document your actual or expected results/accomplishments from using GPUs

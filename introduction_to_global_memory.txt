@@ -1,0 +1,128 @@
+# Introduction to Global Memory
+
+## Global memory operations
+- `__host__ __device__ cudaError_t cudaMalloc( void** devPtr, size_t count )` - allocates `count` bytes of GPU global memory and saves address in `devPtr`.
+
+- `__host__ cudaError_t cudaMemcpy(void* dst, const void* src, size_t count, enum cudaMemcpyKind kind)` - copy data from `src` to `dst`. **Synchronous with respect to the host.**. Possible values of `cudaMemcpyKind` are:`cudaMemcpyHostToHost`, `cudaMemcpyDeviceToHost`, `cudaMemcpyHostToDevice`, and `cudaMemcpyDeviceToDevice`.
+
+- `__host__ cudaError_t cudaMemset(void* devPtr, int value, size_t count)` - sets **every byte** in `devPtr` to `value` (not `int`, but byte!)
+
+- `__host__ __device__ cudaError_t cudaMemcpyAsync(void* dst, void* src, size_t count, enum cudaMemcpyKind kind, cudaStream_t stream)` - **Asynchronous version of `cudaMemcpy`.** Can also be called within a device but `kind` can only be `cudaMemcpyDeviceToDevice`.
+
+    * *Don’t use `cudaMemcpyAsync` or its variations within a device.* The cost of launching a copy kernel -- yes, this means `cudaMemcpy` and other CUDA Runtime API calls also launches what is essentially a kernel -- puts unnecessary tole. It is often faster to implement copying within your kernel. [source](https://stackoverflow.com/questions/6063619/cuda-device-to-device-transfer-expensive)
+
+- `__host__ __device__ cudaError_t cudaFree( void* devPtr )` - frees `devPtr`
+
+---
+
+## Different Memory Spaces
+
+GPU and CPU have different global memory spaces. So a host thread cannot access GPU’s global memory and vice-versa. For a CPU thread to access GPU’s global memory, or for GPU thread to access CPU’s memory, `cudaMemcpy` or its derivations must be used to first copy data to the memory space that can be accessed.
+
+Because it is crucial not to mix up which arrays belong to the host and which to the device, a common variable naming convention used is to prepend `h_` in front of host’s global memory and `d_` in front of device’s global memory.
+
+```cpp
+// input tensor that belongs to the host
+float* h_in = malloc(sizeof(float) * num_elements);
+
+// input tensor that will be passed to the kernel and belongs to the device
+float* d_in;
+cudaMalloc(&d_in, sizeof(float) * num_elements);
+```
+
+---
+
+## Input & Output communication
+
+Using `cudaMemcpy`, GPU and CPU copies inputs and outputs of kernels.
+
+> Global memory is the only way for GPU and CPU to communicate inputs and outputs. 
+
+The general pattern is:
+
+1. Allocate all necessary GPU global memory upfront
+1. Copy input from CPU to GPU memory
+1. Launch a kernel
+1. Synchronize with GPU
+1. Copy output from GPU to CPU memory
+1. Free GPU memory
+
+Below, we will take a look at how the above steps are manifested in code. We assume `increment` kernel, `num_input_elements`, and `num_output_elements` are defined. The kernel-launch configuration is arbitrary and is not recommended to do as follows.
+
+```cpp
+float* h_in = malloc(sizeof(float) * num_input_elements);
+float* h_out = malloc(sizeof(float) * num_output_elements);
+
+// occupy h_in with input data
+
+/**
+ * 1. Allocate all necessary GPU global memory upfront 
+ **/
+float* d_in;
+cudaMalloc(&d_in, sizeof(float) * num_input_elements);
+
+float* d_out;
+cudaMalloc(&d_out, sizeof(float) * num_output_elements);
+
+/**
+ * 2. Copy input from CPU to GPU memory
+ **/
+cudaMemcpy(d_in, h_in, sizeof(float) * num_elements, cudaMemcpyHostToDevice);
+
+/**
+ * 3. kernel launch with `d_in` as the input array and `d_out`  
+ * as the output array
+ **/
+increment<<<1, num_input_element>>>(d_in, d_out);
+
+/**
+ * 4. Synchronize with GPU
+ **/
+cudaDeviceSynchronize();
+
+/**
+ * 5. Copy output from GPU to CPU memory
+ **/
+cudaMemcpy(h_out, d_out, sizeof(float) * num_output_elements, cudaMemcpyDeviceToHost);
+
+/**
+ * 6. Free GPU memory
+ **/
+cudaFree(d_in);
+cudaFree(d_out);
+```
+
+
+---
+
+## Error Checking Macro
+
+All CUDA runtime functions return `cudaError_t` object. Therefore, wrap ALL CUDA runtime functions with below error checking macro: 
+\
+[source](https://stackoverflow.com/questions/14038589/what-is-the-canonical-way-to-check-for-errors-using-the-cuda-runtime-api)
+
+
+```cpp
+#define gpuErrChk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+```
+
+You can wrap your CUDA runtime function calls like this:
+
+```cpp
+void* x;
+gpuErrChk(cudaMalloc(&x, size));
+```
+
+All CUDA Runtime API calls return error code from previous asynchronous kernels or memory operations. Therefore, it is especially important to wrap `cudaDeviceSynchronize()` call, since it is often the first CUDA API call after a kernel launch.
+
+```cpp
+gpuErrChk(cudaDeviceSynchronize());
+```

@@ -1,0 +1,127 @@
+# In-depth Dive into Shared Memory
+
+## Shared Memory
+
+> Shared memory is high-performance user-managed cache, 100X faster than the global memory.
+
+There are 3 main use cases:
+
+1. Storing items from global memory that will be used frequently while not increasing register pressure
+2. Temporarily staging data before writing to global memory in order to fully coalesce store operations (ex. coalescing writes in transpose kernel)
+3. Exchanging data amongst threads within the same block (ex. reduction).
+
+**Shared memory is shared among all threads within the same block.** It is allocated on every SM and uses the same hardware as L1 cache. You can configure how to split this resource between L1 cache and shared memory. The portion that is allocated for shared memory is then partitioned to each blocks within the same SM depending on each block’s demand.
+
+---
+
+## Memory banks
+
+/images/bank_layout.png
+
+> This layout of shared memory allows much more flexible read / write operations without wasting any bandwidth compared to global memory.
+
+**Shared memory is divided 32 banks. Each bank has equal width of either 4 or 8 bytes (defaults to 4)**. Each bank can process a single write / read transaction of a word simultaneously with other banks. 
+
+/images/shared_memory_ideal_access_pattern.png
+
+> If all the threads in the warp access a single word from each bank (ex. thread 0 accesses a word from bank 0, thread 1 from bank 1, ...), the request for all 32 words are processed in a single instruction. 
+
+This is an ideal access pattern that fully utilizes the shared memory bus.
+
+/images/shared_memory_ideal_access_pattern2.png
+
+As long the warp requests only a single word from each bank, any deviation of the pattern is fine.
+
+### Bank Conflicts
+
+Remember, a single bank can only process a single word at a time. Then what would happen if threads in a warp attempts to access different words from the same bank?
+
+/images/shared_memory_bank_conflict.png
+
+> A request for $n$ distinct words to the same bank is serialized to $n$ separate requests which leads to low shared memory bus utilization. We call this **bank conflict.**
+
+The above illustration most likely will lead to 8-way bank conflict where a single request has to be performed in 8 separate instructions. However, there is an exception where there may be no conflict. 
+
+> If all threads that are accessing the same bank are accessing the exact same word within the bank, then there is no bank conflict.
+
+A single thread in the warp reads the word from shared memory. Then, it casts the word to all other threads that are accessing the same word.
+
+----
+
+## Block-wise Synchronization
+
+> Before reading from shared memory, all threads within the block has to be synchronized to avoid race condition via `__syncthreads()`.
+
+For instance, let’s take a look at a simple kernel below:
+
+```cpp
+// launched with 1D blocks of 128 threads
+__global__ void thisIsBad(){
+
+    // 1. statically allocates shared memory (that is shared by all other threads within the block)
+    __shared__ int threadIdx_shared[128];
+    
+    // 2. writes to shared memory (without any bank conflict)
+    threadIdx_shared[threadIdx.x] = threadIdx.x;
+    
+    // ERROR: race condition!
+    int swapped_threadIdx_reg = threadIdx_shared[128 - 1 - threadIdx.x];
+}
+```
+
+The kernel does 3 simple things:
+
+1. statically allocates shared memory (that is shared by all other threads within the block)
+2. writes to shared memory (without any bank conflict)
+3. reads what other thread has written to shared memory
+
+However, how can you guarantee that the other thread has written to shared memory? You cannot without an explicit synchronization point: `__syncthreads()`. Remember:
+
+> you cannot assume ANYTHING about the execution order of threads without a synchronization point. 
+
+Sometimes, however, you need to be guaranteed order of some operations. Like above, you need to be guaranteed that the thread that writes to shared memory performs the write operation before the thread that is reading from the same memory region is reading.
+
+CUDA Runtime API provides many synchronization operations of different scope. Here, we will be taking a look at:
+
+```cpp
+__syncthreads()
+```
+
+`__syncthreads()` is a block-wise synchronization operation. This means when a thread reaches `__syncthreads()`, it **waits for until ALL other threads within the same block have also reached the SAME `__syncthreads()`.**\
+
+Now, let’s fix the above kernel:
+
+```cpp
+// launched with 1D blocks of 128 threads
+__global__ void thisIsBad(){
+
+    // 1. statically allocates shared memory (that is shared by all other threads within the block)
+    __shared__ int threadIdx_shared[128];
+    
+    // 2. writes to shared memory (without any bank conflict)
+    threadIdx_shared[threadIdx.x] = threadIdx.x;
+    
+    // 3. perform block-wise synchronization
+    __syncthreads();
+    
+    // 4. Now we can read safely from shared memory
+    int swapped_threadIdx_reg = threadIdx_shared[128 - 1 - threadIdx.x];
+}
+```
+
+By placing `__syncthreads()` before every load operation from shared memory, you can guarantee that the writes come before reads.
+
+### Synchronization and divergence
+
+> All threads within the same block must evaluate to the same branch’s synchronization point.
+
+Even if all threads eventually do hit `__syncthreads()` like below, which branch they evaluate to does matter.
+
+```cpp
+// below synchronization will lead to undefined behavior
+
+if (threadIdx.x % 2 == 0)
+    __syncthreads();
+else
+    __syncthreads();
+```

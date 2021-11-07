@@ -1,0 +1,52 @@
+# Warps
+
+/images/warp.png
+
+**A warp is a group of 32 threads that execute the same instruction in lock-step.** When a kernel is launched, threads of every block are partitioned into warps. 
+
+> 32 consecutive threads form a warp, starting from thread $(0, 0, 0)$. The first warp of a block is composed of thread 0 ~ 31, second warp of thread 32 ~ 63, and so on.
+
+/images/block_to_warp.png
+
+Regardless of the size of the block, discrete number of warps are allocated per block (i.e. half a warp or quarter a warp is not possible). When the number of threads per block configured at kernel launch is not a multiple of 32, the number of warps is rounded up and left-over threads are inactive threads. 
+
+> Inactive threads take up same resources (ex. registers per thread) and, therefore, waste hardware resources. To prevent spawning inactive threads, make sure the number of threads per block is always a multiple of 32.
+
+---
+
+## Hardware view of warps
+
+/images/prevolta_warp.png
+
+For GPUs before Volta, each thread in a warp has its own set of 32-bit registers but share a single program counter and stack with other threads in the warp. A mask of active threads controls which thread within the warp executes instructions at the current cycle.
+
+The programming context of warps are maintained on SM throughout the lifetime of the block. Therefore, there is no cost in context change.
+
+/images/volta_warp.png
+
+From Volta and above, each thread in the warp has its own program counter. However, this doesn’t mean threads don’t diverge. They just converge more optimally after divergence.
+
+### If you want to know more than you should...
+
+There is no analogous hardware unit like a CPU core for threads in a GPU (so, no, a CUDA core isn’t analogous to a CPU core). A thread is essentially a set of registers and other miscellaneous hardware that is maintained by a warp. It is closer to a software abstraction of a “lane” in SIMD architecture. Nvidia coined the term SIMT to describe this architecture.
+
+---
+
+## Branch divergence
+
+Remember, a warp can only execute a single instruction at a time. Then a question that naturally follows is: what happens when threads within the same warp take different execution path due to conditional branches (like in the example below)?
+
+```cpp
+if (threadIdx.x < 4) {
+    printf("Branch A\n");
+} else {
+    printf("Branch B\n");
+}
+```
+
+We know that threads with `threadIdx.x` 0 ~ 31 are assigned to the same warp. However, threads 0 ~ 3 execute branch A and threads 4 ~ 31 execute branch B. 
+
+> **When threads within the same warp take different execution paths due to conditional branches, the different paths are serialized and threads are disabled accordingly. We call this branch divergence.**
+
+In the context of the code above, branch A and B are executed in serial, NOT in parallel. While branch A is executed, threads 4 ~ 31 are disabled. Then, while branch B is executed, threads 0 ~ 3 are disabled. Naturally, **branch divergence is suboptimal and can hurt throughput.**
+

@@ -1,0 +1,29 @@
+# Assignment 2
+
+## 1. Faster Transpose
+
+In Assignment 1, we’ve written a `transpose` kernel in `transpose.cuh`. Now, we are going to write a new transpose kernel with improved throughput:
+
+```cpp
+template <class T>
+__global__ void fasterTranspose(int* dims, int swap_dim1, int swap_dim2, T* in, T* out)
+``` 
+
+The interface is identical to previously written `transpose`, but with a few extra restrictions on performance:
+
+1. **ALL reads and writes to global memory must be fully coalesced and aligned.** You MUST NOT change the default global memory cache configuration
+2. **there should be NO bank conflict** if you are using shared memory. You MUST NOT change the default shared memory configuration (and I strongly recommend you do use shared memory!)
+3. the above conditions **must hold for both `float` -- 32 bits -- and `half` -- 16 bits**. Both `float` and `half` should also display the same throughput.
+
+For the third condition to hold, **assume that value at every dimension of arrays will be a multiple of 2.** 
+
+If you are not sure where to get started, review notes on: 1) Global Memory Optimizations, 2) In-depth Dive Into Shared Memory, 3) `nvprof` profiler, and 4) `cuda-gdb` debugger.
+
+You will find these hints helpful to satisfy the third restriction:
+
+1. Write multiple kernels, one of each datatype
+2. Each kernel must be conditioned on the templated type
+
+You can use your OWN code you’ve written for `transpose` in assignment 1. **If you haven’t gotten 100% on correctness on `transpose`, fix your `transpose` first.**
+
+If you haven’t completed assignment 1 but still want to participate, contact the instructor or one of the TAs via Slack.

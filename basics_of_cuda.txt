@@ -1,0 +1,195 @@
+# Basics of GPU Architecture
+
+***
+
+## Kernel Launch
+**kernel ( global function )** - a “function” that is launched on the device. By default, it is asynchronous with respect to the host -- when the host calls the kernel call, the host proceeds to the next instruction immediately while the device is running the kernel. Every kernel launches a single **grid** of threads. The number of threads and the organization of grid can be configured.
+
+*defining kernel*
+
+```c
+__global__ void foo(int *d, int n)
+{
+	// statically declares shared memory
+	return 1;
+}
+```
+
+*calling kernel:* 
+
+```
+// from the host side
+int main(){
+	size_t num_bytes = 0;
+	cudaStream_t stream = NULL;
+	
+	// lanch kernel
+	foo <<< (1), (1), num_bytes, stream >>> ( arg1, arg2, … )
+	
+	cudaDeviceSynchronize();
+	
+	return 1;
+}
+```
+
+* *parameters*:
+	* `gird_dim` - dimension of the grid that you will use for the kernel call. It can be an `dim3` object or a tuple of integers — `(5)` is the same as `(5, 1, 1)`
+	* `block_dim` - dimension of blocks you will use for the kernel
+	* `size_t num_bytes` - amount of shared memroy allocated  per block in addition to statically allocated shared memory
+	* `cudaStream_t stream` - stream to launch the kernel in\
+\
+\
+
+*device-host synchronization:* after a kernel launch, since kernels are asynchronous to the GPU, you MUST synchronize GPU with CPU.
+
+`cudaError_t cudaDeviceSynchronize( void )`
+
+* *Description:* makes the host wait for the kernel call the complete before moving on to other applications. 
+
+\
+\
+
+*restrictions of kernels:*
+
+* can only access device-side memory ( global memory in each block and local memory )
+* does not support variable number of arguments, static variables, and function pointers
+
+
+***
+
+
+## Thread Organization
+/images/kernel.png
+
+a group of **threads** create a **block**, and a group of **blocks** create a **thread**
+
+* **grid** - a collection of all the threads spawned from a single kernel. A kernel always allocates a single grid. 
+	* *shared resources:*
+		* DRAM
+		* grid-wise synchronization
+
+
+* **block** - a subset of threads in a grid.
+	* *shared resources:*
+		* DRAM
+		* shared memory
+		* block-wise synchronization
+
+
+*setting up grid and block:* 
+1. you can set the dimensions of grid and block by initializing and setting values with `block ( x, y, z )` and `grid ( x, y, z )` in the host. Upon compilation, grids and blocks corresponding to what you have set will be created, 
+2. specify block and grid’s configuration when launching a kernel `<<<(5), (2, 2, 2)>>>`. 
+
+*accessing grid and block’s dimensions:* from both host and device, you can access them using pre-defined register values: `block.x` / `grid.z` in host, `blockDim.x`, `girdDim.z` in the device.
+
+* **dim3** - a datatype that is used as parameters within the <<< ... >>> on kernel launch in order to specify the dimensions of grid and block.
+			• initializing dim3:
+				◦ dim3 block( d1, d2, d3 ) - calling this function initializes a dim3 object of name "block" and you don't actually have to assign the return value to anything.
+				◦ dim3 grid( d1, d2, d3 ) - same as above, but this initializes a variable named "grid"
+
+		‣ setting up proper values for "block" and "grid":
+			• 1. set up the block's dimensions by examining the number of data elements you have.
+			• 2. set up grid's dimensions. You must always round up 
+
+*thread identification:* these are pre-defined register values that identify the thread's index. The return value is of type: uint3
+* `blockIdx` - block index within a grid and accessed by device. `blockIdx.x` is the x coordinate, `blockIdx.y` the y coordinate, and `blockIdx.z` the z coordinate
+
+* `threadIdx` - thread index within a block and accessed by device.
+
+---
+
+## Write code for threads, NEVER for the grid
+
+A single kernel is launched with tens of thousands of threads, and it can easily become overwhelming if you try to write code that will be concurrently run by 50,000 independent threads. That’s why you shouldn’t. You never write code for all the threads within the grid.
+
+
+
+### 1. Assign work to each thread
+
+Before thinking about the dimensions or shapes of your grid and block, imagine you have a pool of threads. Ask your self: to accomplish the goal you have set up, what must each thread do?
+
+ Write code for individual threads, and examine if this code were to be run by 
+
+
+***
+
+## Memory Hierarchy
+
+1. **register (local) memory** - per-thread memory. The fastest memory.
+2. **shared memory** - per-block memory. Can also be used as a user-defined cache. Faster than DRAM but slower than register
+3. **device memory (DRAM)**
+
+***
+
+
+## Memory Space: DRAM
+/images/dram.png
+
+**device (main) memory** - the DRAM in a GPU. A global memory space that can be accessed by all threads on the same GPU. Separate from CPU’s RAM, the host cannot access DRAM memory directly, and the device cannot access host’s RAM memory. The slowest on-chip memory.
+
+_memory commands:_ 
+
+* for most parts, cudaMalloc and malloc are similar. However, unlike malloc, cudaMalloc returns not the pointer but the success / failure of the operation.
+
+`cudaError_t cudaMalloc( void** devPtr, size_t count )`
+
+* _description:_ unlike malloc, the return value specifies success or "cudaErrorMemroyAllocation" upon failrue. The pointer value is stored in "devPtr" instead of being returned
+
+`cudaError_t cudaMemcpy(void* dst, const void* src, size_t count, enum cudaMemcpyKind kind)` 
+
+* _description:_ copies "count" many bytes from "src" to "dst". Performed synchronously, and is often used to copy memory between GPU and CPU.
+* _possible values for `kind`:_
+
+
+	* `cudaMemcpyHostToHost` - copies from CPU memory to CPU
+	* `cudaMemcpyDeviceToHost` - copies from GPU memory to CPU
+	* `cudaMemcpyHostToDevice` - copies from CPU memory to GPU
+	* `cudaMemcpyDeviceToDevice` - copies from GPU to GPU. Done asynchronously, but never overlaps with kernel.
+
+`cudaError_t cudaMemset(void* devPtr, int value, size_t count)` 
+
+* *description:*copies `value` to `devPtr` for `count` number of bytes
+
+`cudaError_t cudaFree( void* devPtr )`
+
+* *description:* frees `devPtr`
+***
+## Memory space: shared memory
+**shared memory** - memory shared among all threads within a single block. Much faster than **device memory**, so it is often used as a user-defined cache.
+
+*allocating shared memory*
+
+* *static decloration:* when the amount of shared memory is known at compile time
+
+```
+__global__ void foo(int *d, int n)
+{
+	// statically declares shared memory
+	__shared__ int s[64];
+}
+```
+
+***
+
+Cuda Runtime API - functions that start with "cuda" that allows both device and host to launch deivce-side functions with automatic configurations ( a  just like kernel launches, but the 
+• When Cuda runtime functions are called inside device functions, the code has to be compiled with device relocatable code turned on ( i.e. add this flag to compiler -rdc=true -lcudadevrt )
+• when the Cuda Runtime API is called for the first time in a thread, there is a significant overhead ( 0.1 ~ 0.2 seconds ) that is required for generating a "
+
+Cuda driver API - functions that start with "cu". The more fundamental functions that make up the Cuda Runtime API and kernel launches.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

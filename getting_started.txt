@@ -1,0 +1,292 @@
+
+# CUDA: Getting Started
+
+## Kernel
+
+A similar concept to a function for GPU is a **kernel**. Let’s take a look at a very simple kernel:
+
+```cpp
+// GPU Kernel
+// Description: performs elemnt-wise add operation between x and y, and write the outputs to y
+__global__ void add(int n, float *x, float *y)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = index; i < n; i += stride)
+        y[i] = x[i] + y[i];
+}
+```
+
+With the above `add` kernel defined, we launch the kernel like this:
+
+```cpp
+// this launches the add kernel
+add<<<grid_dim, block_dim>>>(n, x, y)
+```
+
+
+**Like a function**, a kernel:
+
+1. takes arguments
+2. performs operations defined in the “kernel body”
+
+However, **unlike a function**, kernel:
+
+1. is executed by multiple threads
+2. does **NOT return** (i.e. the return type is always `void`).
+3. is marked by one of: `__global__`, `__device__`, and `__host__`.
+3. is **asynchronous** with respect to the CPU by default
+
+We will address each of the differences in detail below.
+
+---
+
+### 1. Kernel configuration
+The biggest difference between a CPU’s function and a GPU’s kernel is that a kernel is executed by multiple threads — as many as hundreds of thousand threads.
+
+Let’s take a look at how threads are organized:
+
+/images/kernel.png
+
+A kernel is always launched with a single **grid**. 
+
+> A **grid is a 3D matrix of blocks**, and a **block is a 3D matrix of threads**. **All the threads within a grid executes the same body of code.**
+
+* **thread** - the lowest-resolution unit of worker.
+
+* **block** - a **3D matrix of threads**. Each **thread** in a block has a coordinate unique to the thread within the block. The coordinate of a thread within a block can be accessed by a thread with **predefined register variable:** `threadIdx.x`, `threadIdx.y`, and `threadIdx.z`.
+
+* **grid** - a **3D matrix of block of identical dimensions**. Each **block** in a grid has a coordinate unique to the block. The coordinate of a block within the grid can be accessed by a thread with **predefined register variable:** `blockIdx.x`, `blockIdx.y`, and `blockIdx.z`.
+
+#### Accessing block & grid coordinates
+
+Coordinate information of a thread is essential in distributing work to threads. Remember, **all threads within a grid execute the same body of code**. Then how do we assign different work to threads? We map items — the index of matrix item in the above `add` example — to threads using grid & block coordinates.
+
+> Grid and block coordinates are used to mapping threads to items.
+
+A thread in a block has a coordinate that is unique to the thread within the block. Since a block is 3D, a thread has 3 block coordinates which can be accessed by predefined register variables:
+
+* `int threadIdx.x`
+* `int threadIdx.y`
+* `int threadIdx.z`
+
+And a block also has a unique coordinate within a grid, which can be accessed by:
+
+* `int blockIdx.x`
+* `int blockIdx.y`
+* `int blockIdx.z`
+
+We can also access the dimensions of grid and blocks with a set of predefined register variables:
+
+* `int blockDim.x`
+* `int blockDim.y`
+* `int blockDim.z`
+
+and
+
+* `int gridDim.x`
+* `int gridDim.y`
+* `int gridDim.z`
+
+#### Mapping work items to threads
+
+Let’s say we want to perform element-wise addition between two float matrices `x` and `y` of 144 floats. 
+
+> The dimensions of input & output arrays don’t matter most of the time, since N-dimensional matrices are actually implemented as 1D arrays in memory.
+
+The most common — yet suboptimal — way is to map one thread to a single work item. For the above add kernel, this means: thread `0` performs `x[0] + y[0]` and writes to `y[0]`, thread `1` performs `x[1] + y[1]` and writes to `y[1]` and so on.
+
+Since we have one-to-one mapping of items to threads, we need to launch a grid with as many threads as items. The size of each block can have significant impacts on performance, but we will overlook this for the time being. For now, let’s arbitrarily choose to spawn a (3 x 3) grid of (4 x 4) blocks. We will step through calculating the index for thread (1 x 2) in block (1, 1) and then generalize this process to all threads.
+
+/images/block_thread_diagram.png
+
+- First, **calculate the block offset**: if you were to flatten your N-dimensional grid, what is the index of the block that the thread is in?
+
+/images/block_offset.png
+
+\\[ blockOffset = blockIdx.y * gridDim.x + blockIdx.x  \\]
+
+- Also, **calculate the thread offset:** if you were to flatten your N-dimensional block, what is the index of the thread within the block?
+
+/images/thread_offset.png
+
+\\[ threadOffset = threadIdx.y * blockDim.x + threadIdx.x \\]
+
+- Then, **convert block offset to thread offset:** Since our $blockOffset = 4$, and $threadsPerBlock = blockDim.x * blockDim.y$, we can convert block offset by: $blockOffset * threadsPerBlock$.
+
+- Finally, **Add converted block offset with thread offset:** $index = blockOffset * threadsPerBlock + threadOffset$. 
+
+
+The generalized form would be:
+
+* **1D grid & block**
+
+```cpp
+// 1D thread index 
+int threads_per_block = blockDim.x
+
+// calculate index a thread within a 1D block
+int thread_offset = threadIdx.x
+
+//calculate index a block within a 2D grid
+int block_offset = blockIdx.x
+
+// calculate index a thread within a 1D block and 1D grid
+int index = block_offset * threads_per_block + thread_offset;
+```
+
+* **2D grid & block**
+
+```cpp
+// 2D thread index
+
+// number of threads in a block
+int threads_per_block = blockDim.x * blockDim.y
+
+// calculate index a thread within a 2D block
+int thread_offset = threadIdx.y * blockDim.x + threadIdx.x;
+
+// calculate index a block within a 2D grid
+int block_offset = blockIdx.y * gridDim.x + blockIdx.x
+
+// index of thread within a 2D grid
+int index = block_offset * threads_per_block + thread_offset
+```
+
+
+* **3D grid & block**
+
+```cpp
+// 3D thread index
+
+// number of threads in a block
+int threads_per_block = blockDim.x * blockDim.y * blockDim.z
+
+// calculate index the thread within a 3D block
+int thread_offset = threaIdx.z * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+
+// calculate index the block within a 3D grid
+int block_offset = blockIdx.z * gridDim.x * gridDim.y + blockIdx.y * gridDim.x + blockIdx.x
+
+// index of thread within a 3D grid
+int index = block_offset * threads_per_block + thread_offset
+```
+
+
+#### Launching a kernel
+
+Launching a kernel is just like calling a function, except it takes extra parameters in: `<<<grid_dim, block_dim>>>` format.
+
+Below, we are launching a kernel with 1D block of 16 threads and 1D grid of 16 blocks. We can configure block and kernel in multiple ways: 
+
+-  construct **`dim3` type**. Omitted values are implied to be `1`.
+
+
+```cpp
+// create block of dimension [16 x 1 x 1]
+dim3 block_dim(16, 1, 1); // equal to: dim3 block_dim(16)
+
+// create grid of dimension [16 x 1 x 1]
+dim3 grid_dim(16, 1, 1); // equal to: dim3 grid_dim(16)
+
+// launch kernel
+add<<<grid_dim, block_dim>>>(n, x, y);
+```
+
+- passing in **`int` values inside `(x, y, z)`**. Omitted values are implied to be `1`.
+
+```cpp
+add<<<(16, 1, 1), (16, 1, 1)>>>(n, x, y);
+
+// equal to:
+// add<<<(16), (16)>>>(n, x, y);
+```
+
+- For 1D block and grid, pass **a single value of `int`** directly.
+
+```cpp
+add<<<16, 16>>>(n, x, y);
+```
+
+---
+
+### 2. Passing input and outputs
+
+**A kernel MUST return `void`.** Then how can a kernel pass outputs of the kernel to the CPU? 
+
+> A kernel writes output to a global array that is passed to the kernel as an argument. 
+
+In the above `add` kernel, the kernel writes output to array `y` that CPU has allocated. Once `add` kernel goes to completion, CPU will read from array `y`. A pseudo-code of this process would look like this:
+
+```cpp
+// allocate array x and y
+
+// launch kernel with and give x and y as arguments
+add<<<grid_dim, block_dim>>>(n, x, y);
+
+// wait for the GPU to finish
+cudaDeviceSynchronize(); 
+
+// read from array y
+```
+
+
+We will discuss how to allocate and read from these arrays further in [CUDA: Memory Model]() section of the tutorial (these arrays are unlike regular arrays allocated with `malloc(size)`!).
+
+---
+
+### 3. Types of kernel
+
+There are 3 types of kernel, each marked by one of `__global__`, `__device__`, and `__host__` specifiers.
+
+- `__global__` kernel can be launched by a CPU function and GPU kernel. Executed on GPU.
+- `__device__` kernel can only be called within a GPU kernel. Executed on GPU.
+- `__host__` CPU function. Identical to a regular function without any of the 3 specifiers. Executed on CPU.
+
+So far, we have only discussed launching a kernel from a CPU function, but we can **also launch a GPU kernel from another GPU kernel**. We will go into details of this later in the course.
+
+---
+
+### 4. Synchronization
+
+By default, kernel launch is **asynchronous** with respect to the CPU.
+
+> CPU’s host thread does not wait for the GPU kernel to return. Instead, it skips a head to the next line of code.
+
+So if we were to try to use the values in output array `y`, our code would be incorrect since we cannot guarantee that the kernel has gone to completion and the correct values written to `y`:
+
+```cpp
+// allocate array x and y
+
+// launch kernel with and give x and y as arguments
+add<<<grid_dim, block_dim>>>(n, x, y);
+
+// read from array y   <---- ERROR! 
+
+// ERROR: since `add` is ASYNCRHONOUS, we cannot guarantee that
+// the kernel has gone to completion.
+```
+
+This is a rule to keep close to your heart:
+
+> Never read from an output array of a kernel before you can guarantee that the kernel returned.
+
+Therefore, we use a **synchronization point.**
+
+> **synchronization point** ensures that the kernel goes to completion before executing the next line of code.
+
+`cudaDeviceSynchronize()` is a synchronization point between GPU and CPU. When the CPU host thread hits `cudaDeviceSynchronize()`, **it waits for ALL CUDA events (ex. kernels and memory operations) to complete before executing the next line of code.**
+
+A correct piece of code would look like this:
+
+```cpp
+// allocate array x and y
+
+// launch kernel with and give x and y as arguments
+add<<<grid_dim, block_dim>>>(n, x, y);
+
+// wait for `add` kernel to go to completion
+cudaDeviceSynchronize();
+
+// read from array y
+```

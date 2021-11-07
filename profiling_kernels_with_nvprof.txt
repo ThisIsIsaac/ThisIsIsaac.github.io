@@ -1,0 +1,122 @@
+# Profiling Kernels with `nvprof`
+
+Below is a **non-comprehensive guide of what I personally found to be important metrics of `nvprof`.** For a comprehensive guide, checkout Nvidia’s [doc](https://docs.nvidia.com/cuda/profiler-users-guide/index.html).
+
+`--print-gpu-trace` prints timeline of activities ( kernel execution, memory copies, memory set )
+
+---
+
+## How to profile metrics
+You can profile metrics using `nvprof`:
+
+```bash
+nvprof --metrics <metric>
+``` 
+
+where `<metric>` is one or multiple metrics that are separated by comma:
+
+```bash
+nvprof --metrics achieved_occupancy
+
+nvprof --metrics gld_efficiency, gst_efficiency
+```
+
+To see a complete list of metrics, run `nvprof --query-metrics`
+
+* `all` - profiles all metrics
+
+---
+
+## Have I fully coalesced and aligned global memory operations?
+
+The two most important metrics when analyzing memory operations are:
+
+* `gld_transactions_per_request` - average number of global load transaction performed for each global memory load
+* `gst_transactions_per_request` - average number of global store transaction performed for each global memory store
+
+Respectively, they can be used to check if your global memory read and write operations are properly coalesced and aligned. The definitions of these metrics may seem puzzling, so let’s take a look at an example:
+
+```cpp
+__global__ void stridedMemoryAccess(float* in, int num_elements;){
+    
+    // just like regular global memory access, but with stride
+    int index = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
+    
+    // This is a single global memory load
+    // but how many global load transactions does this load require?
+    float in_reg = in[threadIdx.x * 4];
+}
+```
+
+Above, there is a single load transaction where each thread requests a 4-byte word from global memory. Remember, a single misaligned or uncoalesced global memory access requires multiple load transactions. Above, a single load requires 4 load transactions because loads are uncoalesced. `gld_transactions_per_request` will be `4.0`.
+
+If  memory operations are completely coalesced and aligned, you will   receive `1.0`. If they are completely uncoalesced and unaligned (i.e. all 32 threads in the warp request read or write transactions that each have to be served in a separate operation), you will receive `32.0`.
+
+For example, in a naively written transpose kernel, reads from input array are fully coalesced but writes to output array are uncoalesced. Then, you will see profiling results like below:
+
+```bash
+>>> nvprof ./naiveTranspose --metrics gld_transactions_per_request, gst_transactions_per_request
+
+Device "Volta V100"   Metrics    Transactions
+Kernel:naiveTranspose(float*, float*, int, int)
+   1    gld_transactions_per_request   1.000000
+   1    gst_transactions_per_request  32.000000
+```
+
+Other miscellaneous memory operation metrics that you may find helpful are:
+
+* `dram_read_bytes` - total bytes read from DRAM
+* `dram_read_throughput` - achieved DRAM memory read throughput
+* `dram_read_transactions` - number of DRAM read transactions
+* `dram_write_bytes` - total number of bytes written from L2 cache to DRAM
+
+---
+
+## Is there any shared memory bank conflict?
+
+There is a similar metric with which you can check to make sure there are no bank conflicts:
+
+
+* `shared_load_transactions_per_request` - average number of shared load transaction performed for each global memory load
+* `shared_store_transactions_per_request` - average number of shared store transaction performed for each global memory store
+
+The above metrics tell whether there is any bank conflict. A single shared load / store can be served be served by a single transaction if there is no bank conflict, resulting in `shared_load_transactions_per_request` and `shared_store_transactions_per_request` of `1.0`. However, if there are is an $n$-way bank conflict, then a single load / store requires $n$ many transactions.
+
+---
+
+## Have I fully parallelized?
+
+The fundamental advantage of GPU programming is being able to take advantage of parallelism. So how do you know if you have reached hardware parallelization limits?
+
+* `issue_slot_utilization` - percentage of issue slots that have issued an instruction per cycle, averaged over all warp schedulers (Upto and including Volta, all schedulers have 1 issue slot).
+* `eligible_warps_per_cycle` - average eligible warps per cycle. 
+* `issued_ipc` - instructions issued per cycle
+
+If `issue_slot_utilization` is `1.0`, you are fully taking advantage of parallelization. If they are lower, then you are missing the opportunity to issue instructions that much.
+
+#### How can I further parallelize my kernel?
+
+The first is to ask yourself: 
+
+> “Did I spawn enough threads?”
+
+Sometimes you simply haven’t spawned enough threads. You can check out how saturated each SM is with below metric:
+
+* `achieved_occupancy` - ratio of average active warps per cycle to maximum active wraps per cycle supported on an SM. ( closer to 1 is better ).
+
+If `achieved_occupancy` is low, try spawning more threads.  Reduce the number of items that each thread processes and find more opportunities in the computation that can be parallelized. For complex computations, such as a DNN, drawing out computation graphs can be helpful to identifying what computations can be performed in parallel and what have to be performed in serial.
+
+However, it is very common that `issue_slot_utilization` is low even when you have spawned enough threads. This means the threads are stalling for too long. There are many reasons threads stall, so to get a more specific idea why they are stalling, we use below metrics:
+
+* `stall_sync` - percentage of stalled warps due to block-wise synchronization ( `__syncthreads()` or `bar.sync` )
+* `stall_exec_dependency` - percentage of stalled warps because the input is not ready (i.e. register dependency )
+
+There are other stall metrics that you can checkout in the [doc](https://docs.nvidia.com/cuda/profiler-users-guide/index.html#profiling-overview). Once you have identified causes for stalls, try to analyze parts of your code that you suspect may be the cause. For example, if `stall_sync` is the primary reason, look to `__syncthreads()`. Maybe there are unnecessary synchronization points or you can access shared memory less frequently by increasing register pressure.
+
+---
+
+## Is there any brach divergence?
+
+Although catching branch divergence is more obvious, it is a good sanity check:
+
+* `branch_efficiency` - ratio of non-divergent branch to total number of branches in percentage. ( closer to 100 is better )

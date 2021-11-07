@@ -1,0 +1,17 @@
+# Assignment Instructions
+
+## Logistics
+1. You CANNOT consult ANY material other than CUDA C Programming guide for API DOCUMENTATIONS only. This means you cannot consult with fellow students, consult any code from the internet or CUDA C Programming guide.
+1. use CUDA toolkit 9.2 or newer
+1. use GPUs of Pascal architecture (GTX10xx series) or newer
+
+---
+
+## General Instructions
+1. Variable name should follow the convention of prepending `h_` for host and `d_` for device memory
+1. ALL CUDA Runtime API calls should be wrapped by a function that checks the status and raises error properly. You can copy and paste the code from [Introduction to Global Memory](https://joongkunlee.ghost.io/introduction_to_global_memory/) notes under section “Error Checking Macro”.
+1. Each problem should be saved in a separate `.cuh` file (NOT `.cu`!).
+1. You will be able to grade your own code with the released grading code in the [github repo](https://github.com/ThisIsIsaac/CUDA_course_assignments). You MUST NOT edit and commit ANY code associated with grading.
+1. read [Measuring Runtime of Kernels](https://joongkunlee.ghost.io/measuring_runtime_of_kernels/) and measure the runtime of any kernel you are asked to write as part of the assignment you will hand in.
+1. You must free ALL allocated resources. (i.e. make sure to `cudaFree()` or `free()` ALL dynamically allocated memory).
+

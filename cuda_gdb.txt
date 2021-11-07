@@ -1,0 +1,83 @@
+# CUDA GDB
+
+We are going to assume you know the basics of `gdb`. To read more details of `cuda-gdb`, checkout [official cuda-gdb guide](https://docs.nvidia.com/cuda/cuda-gdb/index.html#kernel-focus) from Nvidia.
+
+> Unless warps are diverged, 
+
+---
+
+## Control Flow
+
+### Focus
+
+> Focus is always applied to a single thread. All commands issued are only applied to the thread (and to the warp of the thread for control flow commands) in focus.
+
+You can apply focus in terms of either hardware units () or software units ().
+
+- **hardware units:** `device` > `sm` > `block` > `warp` > `lane`
+- **software units:** `kernel` > `block` > `thread`
+
+#### Inspecting focus
+
+To inspect current focus in terms of hardware units:
+```
+(cuda-gdb) cuda device sm warp lane block thread
+block (0,0,0), thread (0,0,0), device 0, sm 0, warp 0, lane 0 
+```
+
+And in terms of software units:
+
+```
+(cuda-gdb) cuda kernel block thread
+kernel 1, block (0,0,0), thread (0,0,0)
+```
+
+#### Switching focus
+
+To switch focus:
+
+```
+(cuda-gdb) cuda device 0 sm 1 warp 2 lane 3
+[Switching focus to CUDA kernel 1, grid 2, block (8,0,0), thread
+```
+
+Parentheses are optional:
+```
+(cuda-gdb) cuda block 1 thread (3, 0, 0)
+[Switching focus to CUDA kernel 1, grid 2, block (1,0,0), thread (3,0,0)
+```
+
+Notice that there are some omitted values. `cuda-gdb` assumes the omitted values to be the values in the current focus.
+
+---
+### Step
+
+> Step instructions are applied to the warp of the thread in focus.
+
+#### synchronizations
+
+Stepping over synchronization points such as `cudaDeviceSynchronize()` or `__syncthreads()` will make the thread in focus wait until all threads in the scope of the synchronization have hit the synchronization point.
+
+---
+
+### Printing Global & Shared Memory
+
+
+
+### Breakpoints
+> All threads that hit the breakpoint will stop execution. However, it breakpoints do not guarantee 
+
+To put breakpoints on templated functions, you must give the full signature:
+
+```
+(cuda-gdb) break int my_templatized_function<int>(int)
+```
+
+### Watchpoints
+
+Device watchpoints are not supported. You can only set watchpoints in the host code.
+
+### Core dumps
+Set `CUDA_ENABLE_COREDUMP_ON_EXCEPTION=1` environment variable to have `cuda-gdb` generate core dumps on exceptions. 
+
+If you want user-induced core dumps, set `CUDA_ENABLE_USER_TRIGGERED_COREDUMP=1`. When you interrupt the process, `cuda-gdb` will generate core dumps.

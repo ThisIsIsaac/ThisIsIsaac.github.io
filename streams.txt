@@ -1,0 +1,3 @@
+# Streams
+
+> Call to a synchronous function will block until ALL preceding CUDA operations complete. [source](https://stackoverflow.com/a/16167483/11066596)

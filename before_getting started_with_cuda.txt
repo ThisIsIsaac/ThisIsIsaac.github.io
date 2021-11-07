@@ -1,0 +1,64 @@
+# Before getting started with CUDA…
+
+## Prerequisites
+
+Make sure you have basic understanding of these topics, listed in order of importance:
+
+1. **Comfortable with C**
+2. **Caching behavior (local & temporal locality)** 
+     * _review resources:_ [pdf](http://www.cs.cmu.edu/afs/cs/academic/class/15213-s18/www/lectures/12-cache-memories.pdf) [lecture](https://scs.hosted.panopto.com/Panopto/Pages/Viewer.aspx?id=3395b86e-0bd4-425d-8872-251e714acdd7)
+3.  **GDB**
+	* _review resources:_ [tutorial](https://www.cs.cmu.edu/~gilpin/tutorial/)
+4. **multi-threading**
+	* _review resources:_ [pdf](http://www.cs.cmu.edu/afs/cs/academic/class/15213-s18/www/lectures/26-parallelism.pdf) [lecture](https://scs.hosted.panopto.com/Panopto/Pages/Viewer.aspx?id=9ba08262-5318-45f2-a7e1-475e33a98e53)
+4. **Assembly**
+	* _review resources:_ [pdf1](http://www.cs.cmu.edu/afs/cs/academic/class/15213-s18/www/lectures/05-machine-basics.pdf) [lecture1](https://scs.hosted.panopto.com/Panopto/Pages/Viewer.aspx?id=6e410255-3858-4e85-89c7-812c5845d197)
+
+I recommend [Computer Systems: A Programmer's Perspective](https://csapp.cs.cmu.edu/) by Bryant and O’Hallaron as the primary resource. You can check out [CMU 15-213](https://www.cs.cmu.edu/~213/) where you can find more resources on computer systems.
+
+---
+
+## Course material
+
+### Main material
+* `https://joongkunlee.ghost.io/` 블로그에 **숙제와 강의 노트**가 매주 업로드 됩니다.
+** 매주 블로그 하나씩 올라갈 예정이고 **강의 전에 알아야 할 내용을** 설명할 것 입니다. **꼭 강의 전까지 읽어주세요. 강의에선 블로그에 나와 있는 내용을 커버하지 않을거고 이미 읽으셨다는 것을 전제로 수업을 진행할 예정입니다.**
+
+
+### Supplementary material
+* **Professional CUDA C Programming** by Jong Cheng
+** 필요하신경우 저에게 slack 으로 문의 주세요. 준비해드리겠습니다.
+* **Nvidia Developer Blog**: `https://devblogs.nvidia.com/`
+
+---
+
+## 수업 진행
+
+### 질문 방법
+- **Concept** 에 관한 질문들은 `https://joongkunlee.ghost.io/` 각 블로그 페이지 밑에 있는 댓글란에 남겨 주시면 바로 답을 하겠습니다. (slack 은 히스토리가 사라지고 정보를 모으기 어렵기 때문에 뎃글 란을 사용합니다.) **영어/한국어 상관 없습니다.**
+- **Debugging & programming** 에 관련된 질문은 **Slack** 에 남겨주시거나 **5층**으로 찾아와주세요.
+
+
+### 수업 준비물
+* 노트북
+** CUDA toolkit 9.0 이상
+** Nvidia GPU
+** C++ IDE
+
+### Assignments
+
+숙제 submission & 체점 방식은 후에 공지하도록 하겠습니다
+
+---
+
+## Main resources
+
+The lessons are constructed based on:
+
+ - [CUDA Runtime doc](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html)
+ - [Nvidia Developer Blog](https://devblogs.nvidia.com/)
+ - [PTX ISA](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html)
+ - [Program profiling & bottleneck analysis](https://docs.nvidia.com/cuda/profiler-users-guide/index.html) 
+ - [CUDA gdb](https://docs.nvidia.com/cuda/cuda-gdb/index.html) 
+ - Professional CUDA C Programming by John Cheng
+

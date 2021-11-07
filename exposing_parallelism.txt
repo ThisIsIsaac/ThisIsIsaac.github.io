@@ -1,0 +1,69 @@
+# Exposing Parallelism
+
+## Warps issue instructions, not threads!
+
+Although we code in terms of threads, individual threads never issue instructions.
+
+> Threads’ requests are gathered by warps, and warps issue instructions based on all the requests from each warp’s 32 threads.
+
+This has a huge implication on how you should read and write code. 
+
+### First, analyze the code from a single thread
+
+Read the code from the perspective of a single thread. Pin your focus to a single individual thread, say thread $(0, 0, 0)$ of block $(0, 0, 0)$. Then walk through the kernel from the perspective of the thread. At this stage, you are mostly checking for correctness. Is the thread reading from the correct memory region? Did I catch all the edge cases? Is there no unnecessary synchronization point or race conditions?
+
+Try out a few other threads. Good candidates are the first thread of the first block, last thread of the same block, a thread in a different block, the last thread of the last block. If these all check out, then we expand the scope to the warp.
+
+### Second, analyze the code again, but from a warp’s perspective
+
+We know that the code works as intended for a single thread, but does it work, and does it work EFFFECIENTLY with 31 other threads? Try stepping through the code, but instead of a single thread, think of how the entire warp is issuing instructions. Why from a warp’s perspective?
+
+> Because a warp is the entity that issues instructions, not threads.
+
+This is a point I can’t emphasize enough. A single grid is a giant factory that produces instructions to be processed and consumes the results when compute cores or memory units deliver outputs to those instructions. For a kernel to have high throughput, the grid has to be efficient. For the grid to be efficient, blocks within the grid has to be efficient. For blocks to be efficient, warps within each grid has to be efficient. And warp is the lowest-granularity entity that issues instructions. That’s why it is absolutely crucial that you are able to analyze the code from a warp’s perspective to figure out exactly what instructions are issued. 
+
+For instance:
+
+```cpp
+
+```
+
+### Status of warps
+
+Any warp that is spawned is called **active warps**. Of active warps:
+
+- **eligible warps**: warps that are ready to issue instruction in the current cycle.
+- **selected warps**: eligible warps that are selected by the warp-scheduler to execute an instruction.
+- **stalled warps**: warp that doesn’t have any instruction to issue in this cycle. There can be many reasons that a warp is stalled. the common ones are:
+    - Waiting for the issued instruction to complete. If the warp has issued an instruction that takes *N* cycles, then the warp will stall for *N* cycles.
+    - Synchronization
+    - There is a cool-down period for certain operations (ex. on V100, only FP64 instructions have cooldown). 
+
+---
+
+## Warp scheduler
+
+**Warp-schedulers fetch instructions from eligible warps and deliver the instructions to compute cores to be executed.** There are a few warp-schedulers per SM (ex. on V100, there are 4 warp-schedulers per SM). At every cycle, a warp scheduler can deliver a single instruction from a single warp. **The number of instructions that a single warp-scheduler can deliver per cycle is the issue width of the scheduler.**
+
+> To take full advantage of parallelism, there must be as many eligible warps as there are warp schedulers per SM at every cycle. This means, if there are already enough number of eligible warps at every cycle, increasing parallelism will not increase throughput further.
+
+A warp-scheduler has a set of **warp slots** (ex. V100 has 16 warp slots per warp-scheduler). Warps and warp slots are mapped one-to-one, and the mapping doesn’t change throughout the lifetime of the warp.
+
+### Walkthrough with examples
+
+Below is a warp-scheduler with 8 warp slots.
+
+/images/warp_scheduler1.png
+
+At cycle *N*, there are 5 active warps, among which 3 are stalled, 1 is eligible, and 1 is selected. 
+
+At *N + 1*, the previously selected warp has become stalled because it is waiting for the previously issued instruction to complete, and another eligible warp is selected.
+
+At *N + 2*, there is no eligible warp, so the scheduler does not issue any instruction. We also see that a warp has retired.
+
+/images/warp_scheduler2.png
+
+Let’s take a look at a different scenario where all 8 warps are issuing `FP64` instructions. At cycle *N + 1*, we see that 6 warps that were previously eligible at *N* are now stalled because of FP64 instruction cool-down. This doesn’t mean FP64 compute pipeline is saturated. Once the cool-down is over, at *N + 4*, another FP64 instruction is issued.
+
+/images/warp_scheduler3.png
+
